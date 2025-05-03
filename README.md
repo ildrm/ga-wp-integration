@@ -127,7 +127,3 @@ This plugin is licensed under the [GNU General Public License v2 or later](https
 For issues, feature requests, or questions:
 - Open an issue on the [GitHub Issues page](https://github.com/ildrm/ga-wp-integration/issues).
 - Contact the author via [ildrm.com](https://ildrm.com).
-
----
-
-*Note*: Replace `ildrm` in the repository URLs with your actual GitHub username. Screenshots are placeholders; update with actual images in your repository.
