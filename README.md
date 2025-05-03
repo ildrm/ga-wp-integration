@@ -81,13 +81,9 @@ The **Google Analytics WP Integration** plugin enables WordPress and WooCommerce
 ### Folder Structure
 ```
 ga-wp-integration/
-├── assets/
-│   ├── css/
-│   │   └── admin.css
-│   ├── js/
-│   │   └── admin.js
-├── languages/
 ├── ga-wp-integration.php
+├── LICENSE
+├── readme.txt
 └── README.md
 ```
 
