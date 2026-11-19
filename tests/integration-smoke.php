@@ -80,6 +80,12 @@ $plugin = GA_WP_Integration::get_instance();
 if ($mode === 'settings') {
     require_once ABSPATH . 'wp-admin/includes/admin.php';
     $plugin->register_settings();
+    $plugin->enqueue_admin_assets('dashboard');
+    $expect(!wp_style_is('ga-wp-event-mappings'), 'Other admin screens must skip the mapping stylesheet.');
+    $plugin->enqueue_admin_assets('toplevel_page_ga-wp-integration');
+    $expect(wp_style_is('ga-wp-event-mappings', 'enqueued'), 'The mapping screen must load its stylesheet.');
+    $html = $capture([$plugin, 'render_mappings_section']);
+    $expect(str_contains($html, 'id="ga-add-mapping"') && !str_contains($html, '<style>'), 'The editor view must render with external styles.');
     $registered = get_registered_settings();
     $expect($registered['ga_wp_settings']['group'] === $registered['ga_wp_mappings']['group'], 'Both options must share the settings form group.');
     $expect($plugin->sanitize_settings(['gtm_code' => ' gtm-fixture123 '])['gtm_code'] === 'GTM-FIXTURE123', 'Valid GTM IDs must normalize.');
