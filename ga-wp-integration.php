@@ -4,6 +4,8 @@
  * Plugin Name: Google Analytics WP Integration
  * Description: Integrates WordPress and WooCommerce events with Google Analytics by mapping hooks to GA events.
  * Version: 1.0.0
+ * Requires at least: 5.0
+ * Requires PHP: 7.4
  * Author: Shahin Ilderemi
  * Author URI: https://ildrm.com
  * License: GPL-2.0-or-later
@@ -51,6 +53,9 @@ class GA_WP_Integration
      */
     private $event_mappings = [];
 
+    /** Events collected for the current HTML response. */
+    private $pending_events = [];
+
     /**
      * Default event mappings.
      *
@@ -83,21 +88,22 @@ class GA_WP_Integration
     private function __construct()
     {
         $this->set_default_mappings();
-        $this->ga_settings    = get_option('ga_wp_settings', []);
-        $saved_mappings       = get_option('ga_wp_mappings', []);
-        $this->event_mappings = ! empty($saved_mappings) ? $saved_mappings : $this->default_mappings;
+        $this->ga_settings = $this->sanitize_settings(get_option('ga_wp_settings', []));
+        $saved_mappings = get_option('ga_wp_mappings', false);
+        $this->event_mappings = is_array($saved_mappings) ? $this->sanitize_mappings($saved_mappings) : $this->default_mappings;
 
         add_action('init', [$this, 'load_textdomain']);
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
+        add_action('admin_post_ga_wp_reset_mappings', [$this, 'reset_mappings']);
 
         if (! empty($this->ga_settings['gtm_code'])) {
             add_action('wp_head', [$this, 'inject_gtm_code']);
             add_action('wp_body_open', [$this, 'inject_gtm_noscript']);
+            add_action('wp_footer', [$this, 'render_events'], 50);
+            $this->register_event_hooks();
         }
-
-        $this->register_event_hooks();
     }
 
     /**
@@ -123,7 +129,6 @@ class GA_WP_Integration
                 'hooks'      => ['wp_login'],
                 'parameters' => [
                     ['ga_param' => 'method', 'source' => 'wordpress', 'pattern' => ''],
-                    ['ga_param' => 'user_id', 'source' => 'user_id', 'pattern' => ''],
                 ],
             ],
             [
@@ -131,7 +136,6 @@ class GA_WP_Integration
                 'hooks'      => ['user_register'],
                 'parameters' => [
                     ['ga_param' => 'method', 'source' => 'wordpress', 'pattern' => ''],
-                    ['ga_param' => 'user_id', 'source' => 'user_id', 'pattern' => ''],
                 ],
             ],
         ];
@@ -196,80 +200,17 @@ class GA_WP_Integration
                     ],
                 ],
                 [
-                    'event'      => 'add_shipping_info',
-                    'hooks'      => ['woocommerce_checkout_update_order_review'],
-                    'parameters' => [
-                        ['ga_param' => 'currency', 'source' => 'meta.woocommerce_currency', 'pattern' => ''],
-                        ['ga_param' => 'value', 'source' => 'cart_total', 'pattern' => ''],
-                        ['ga_param' => 'shipping_tier', 'source' => 'selected_shipping_method', 'pattern' => ''],
-                        ['ga_param' => 'items', 'source' => 'cart_items_json', 'pattern' => ''],
-                    ],
-                ],
-                [
-                    'event'      => 'add_payment_info',
-                    'hooks'      => ['woocommerce_checkout_order_processed'],
-                    'parameters' => [
-                        ['ga_param' => 'currency', 'source' => 'meta.woocommerce_currency', 'pattern' => ''],
-                        ['ga_param' => 'value', 'source' => 'cart_total', 'pattern' => ''],
-                        ['ga_param' => 'payment_type', 'source' => 'payment_method', 'pattern' => ''],
-                        ['ga_param' => 'items', 'source' => 'cart_items_json', 'pattern' => ''],
-                    ],
-                ],
-                [
                     'event'      => 'purchase',
-                    'hooks'      => ['woocommerce_payment_complete', 'woocommerce_order_status_completed'],
+                    'hooks'      => ['woocommerce_thankyou'],
                     'parameters' => [
                         ['ga_param' => 'transaction_id', 'source' => 'order_id', 'pattern' => ''],
-                        ['ga_param' => 'value', 'source' => 'order_total', 'pattern' => ''],
+                        ['ga_param' => 'value', 'source' => 'order_items_value', 'pattern' => ''],
                         ['ga_param' => 'currency', 'source' => 'order_currency', 'pattern' => ''],
                         ['ga_param' => 'tax', 'source' => 'order_tax', 'pattern' => ''],
                         ['ga_param' => 'shipping', 'source' => 'order_shipping', 'pattern' => ''],
                         ['ga_param' => 'items', 'source' => 'items_json', 'pattern' => ''],
                         ['ga_param' => 'coupon', 'source' => 'order_coupon_codes', 'pattern' => ''],
                         ['ga_param' => 'affiliation', 'source' => 'site_name', 'pattern' => ''],
-                    ],
-                ],
-                [
-                    'event'      => 'refund',
-                    'hooks'      => ['woocommerce_order_status_refunded'],
-                    'parameters' => [
-                        ['ga_param' => 'transaction_id', 'source' => 'order_id', 'pattern' => ''],
-                        ['ga_param' => 'value', 'source' => 'order_total', 'pattern' => ''],
-                        ['ga_param' => 'currency', 'source' => 'order_currency', 'pattern' => ''],
-                        ['ga_param' => 'items', 'source' => 'items_json', 'pattern' => ''],
-                    ],
-                ],
-                [
-                    'event'      => 'select_item',
-                    'hooks'      => ['woocommerce_before_shop_loop_item_title'],
-                    'parameters' => [
-                        ['ga_param' => 'item_list_id', 'source' => 'taxonomy.product_cat.id', 'pattern' => ''],
-                        ['ga_param' => 'item_list_name', 'source' => 'taxonomy.product_cat.name', 'pattern' => ''],
-                        ['ga_param' => 'items', 'source' => 'current_loop_product', 'pattern' => ''],
-                    ],
-                ],
-                [
-                    'event'      => 'select_promotion',
-                    'hooks'      => ['woocommerce_before_shop_loop_item'],
-                    'parameters' => [
-                        ['ga_param' => 'promotion_id', 'source' => 'promotion_id', 'pattern' => ''],
-                        ['ga_param' => 'promotion_name', 'source' => 'promotion_name', 'pattern' => ''],
-                        ['ga_param' => 'creative_name', 'source' => 'creative_name', 'pattern' => ''],
-                        ['ga_param' => 'creative_slot', 'source' => 'creative_slot', 'pattern' => ''],
-                        ['ga_param' => 'location_id', 'source' => 'location_id', 'pattern' => ''],
-                        ['ga_param' => 'items', 'source' => 'promotion_items', 'pattern' => ''],
-                    ],
-                ],
-                [
-                    'event'      => 'view_promotion',
-                    'hooks'      => ['woocommerce_before_shop_loop'],
-                    'parameters' => [
-                        ['ga_param' => 'promotion_id', 'source' => 'promotion_id', 'pattern' => ''],
-                        ['ga_param' => 'promotion_name', 'source' => 'promotion_name', 'pattern' => ''],
-                        ['ga_param' => 'creative_name', 'source' => 'creative_name', 'pattern' => ''],
-                        ['ga_param' => 'creative_slot', 'source' => 'creative_slot', 'pattern' => ''],
-                        ['ga_param' => 'location_id', 'source' => 'location_id', 'pattern' => ''],
-                        ['ga_param' => 'items', 'source' => 'promotion_items', 'pattern' => ''],
                     ],
                 ],
             ];
@@ -293,25 +234,9 @@ class GA_WP_Integration
         wp_enqueue_script('jquery');
 
         // Enqueue Select2
-        wp_enqueue_style('select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css', [], '4.1.0-rc.0');
-        wp_enqueue_script('select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js', ['jquery'], '4.1.0-rc.0', true);
+        wp_enqueue_style('ga-wp-select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css', [], '4.1.0-rc.0');
+        wp_enqueue_script('ga-wp-select2', 'https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js', ['jquery'], '4.1.0-rc.0', true);
 
-        // Enqueue custom admin script
-        wp_enqueue_script(
-            'ga-wp-admin-script',
-            plugins_url('assets/js/admin.js', __FILE__),
-            ['jquery', 'select2'],
-            '1.0.2',
-            true
-        );
-
-        // Enqueue custom admin styles
-        wp_enqueue_style(
-            'ga-wp-admin-style',
-            plugins_url('assets/css/admin.css', __FILE__),
-            [],
-            '1.0.2'
-        );
     }
 
     /**
@@ -349,7 +274,7 @@ class GA_WP_Integration
     public function register_settings()
     {
         register_setting('ga_wp_settings_group', 'ga_wp_settings', ['sanitize_callback' => [$this, 'sanitize_settings']]);
-        register_setting('ga_wp_mappings_group', 'ga_wp_mappings', ['sanitize_callback' => [$this, 'sanitize_mappings']]);
+        register_setting('ga_wp_settings_group', 'ga_wp_mappings', ['sanitize_callback' => [$this, 'sanitize_mappings']]);
 
         add_settings_section(
             'ga_wp_main_section',
@@ -383,11 +308,8 @@ class GA_WP_Integration
      */
     public function sanitize_settings($input)
     {
-        $sanitized = [];
-        if (isset($input['gtm_code'])) {
-            $sanitized['gtm_code'] = sanitize_text_field($input['gtm_code']);
-        }
-        return $sanitized;
+        $id = isset($input['gtm_code']) && is_string($input['gtm_code']) ? strtoupper(trim($input['gtm_code'])) : '';
+        return ['gtm_code' => preg_match('/^GTM-[A-Z0-9]+$/D', $id) ? $id : ''];
     }
 
     /**
@@ -400,23 +322,34 @@ class GA_WP_Integration
     public function sanitize_mappings($input)
     {
         $sanitized = [];
-        if (is_array($input)) {
-            foreach ($input as $index => $mapping) {
-                $sanitized[$index] = [
-                    'event'      => sanitize_text_field($mapping['event'] ?? ''),
-                    'hooks'      => array_map('sanitize_text_field', (array) ($mapping['hooks'] ?? [])),
-                    'parameters' => [],
-                ];
-                if (isset($mapping['parameters']) && is_array($mapping['parameters'])) {
-                    foreach ($mapping['parameters'] as $param) {
-                        $sanitized[$index]['parameters'][] = [
-                            'ga_param' => sanitize_text_field($param['ga_param'] ?? ''),
-                            'source'   => sanitize_text_field($param['source'] ?? ''),
-                            'pattern'  => sanitize_text_field($param['pattern'] ?? ''),
-                        ];
-                    }
+        foreach ((array) $input as $mapping) {
+            if (! is_array($mapping)) {
+                continue;
+            }
+            $event = sanitize_text_field($mapping['event'] ?? '');
+            $hooks = array_values(array_unique(array_filter(array_map('sanitize_text_field', (array) ($mapping['hooks'] ?? [])))));
+            $hooks = array_values(array_filter($hooks, static function ($hook) {
+                return preg_match('~^[A-Za-z0-9_.:/-]+$~D', $hook);
+            }));
+            if (! preg_match('/^[A-Za-z][A-Za-z0-9_]{0,39}$/D', $event) || ! $hooks) {
+                continue;
+            }
+            $parameters = [];
+            foreach ((array) ($mapping['parameters'] ?? []) as $param) {
+                if (! is_array($param)) {
+                    continue;
+                }
+                $name = sanitize_text_field($param['ga_param'] ?? '');
+                $source = sanitize_text_field($param['source'] ?? '');
+                if ('event' !== $name && preg_match('/^[A-Za-z][A-Za-z0-9_]{0,39}$/D', $name) && preg_match('/^[A-Za-z0-9_.:-]+$/D', $source)) {
+                    $parameters[] = [
+                        'ga_param' => $name,
+                        'source'   => $source,
+                        'pattern'  => sanitize_text_field($param['pattern'] ?? ''),
+                    ];
                 }
             }
+            $sanitized[] = ['event' => $event, 'hooks' => $hooks, 'parameters' => $parameters];
         }
         return $sanitized;
     }
@@ -467,6 +400,7 @@ class GA_WP_Integration
             'template_redirect',
             'woocommerce_add_to_cart',
             'woocommerce_before_checkout_form',
+            'woocommerce_thankyou',
             'woocommerce_payment_complete',
             'woocommerce_order_status_completed',
             'woocommerce_cart_item_removed',
@@ -503,9 +437,6 @@ class GA_WP_Integration
             'site_name',
             'wordpress',
             'user.id',
-            'user.username',
-            'user.email',
-            'user.display_name',
             'user.role',
             'taxonomy.product_cat.id',
             'taxonomy.product_cat.name',
@@ -528,6 +459,7 @@ class GA_WP_Integration
             'payment_method',
             'order_id',
             'order_total',
+            'order_items_value',
             'order_currency',
             'order_tax',
             'order_shipping',
@@ -546,9 +478,22 @@ class GA_WP_Integration
             'location_id',
             'promotion_items',
         ];
+
+        foreach ($mappings as $mapping) {
+            $ga_events[] = $mapping['event'];
+            $available_hooks = array_merge($available_hooks, $mapping['hooks']);
+            foreach ($mapping['parameters'] as $param) {
+                $ga_params[] = $param['ga_param'];
+                $sources[] = $param['source'];
+            }
+        }
+        $ga_events = array_values(array_unique($ga_events));
+        $available_hooks = array_values(array_unique($available_hooks));
+        $ga_params = array_values(array_unique($ga_params));
+        $sources = array_values(array_unique($sources));
     ?>
         <div class="ga-actions">
-            <button type="button" id="ga-reset-defaults" class="button"><?php esc_html_e('Reset to Defaults', 'ga-wp-integration'); ?></button>
+            <button type="submit" id="ga-reset-defaults" form="ga-mappings-reset-form" class="button"><?php esc_html_e('Reset to Defaults', 'ga-wp-integration'); ?></button>
             <button type="button" id="ga-add-mapping" class="button button-primary"><?php esc_html_e('Add Mapping', 'ga-wp-integration'); ?></button>
             <button type="button" id="ga-load-preset" class="button"><?php esc_html_e('Load Preset', 'ga-wp-integration'); ?></button>
         </div>
@@ -696,6 +641,9 @@ class GA_WP_Integration
             jQuery(document).ready(function($) {
                 // Initialize Select2
                 function initializeSelect2($container) {
+                    if (typeof $.fn.select2 !== 'function') {
+                        return;
+                    }
                     $container.find('.ga-event-select').select2({
                         width: '100%',
                         allowClear: false,
@@ -735,16 +683,13 @@ class GA_WP_Integration
                 }
                 initializeSelect2($('#ga-mappings-container'));
 
-                // RTL Support
-                $('html').attr('dir', 'rtl').css('direction', 'rtl');
-
                 // Mapping counter
                 let mappingCount = <?php echo count($mappings); ?>;
 
                 // Reset to defaults
-                $('#ga-reset-defaults').on('click', function() {
-                    if (confirm('<?php echo esc_js(__('Reset all mappings to defaults?', 'ga-wp-integration')); ?>')) {
-                        window.location.href = '<?php echo esc_url(admin_url('admin.php?page=ga-wp-integration&reset=1')); ?>';
+                $('#ga-reset-defaults').on('click', function(e) {
+                    if (!confirm('<?php echo esc_js(__('Reset all mappings to defaults?', 'ga-wp-integration')); ?>')) {
+                        e.preventDefault();
                     }
                 });
 
@@ -772,7 +717,7 @@ class GA_WP_Integration
                         },
                         {
                             event: 'purchase',
-                            hooks: ['woocommerce_payment_complete'],
+                            hooks: ['woocommerce_thankyou'],
                             parameters: [{
                                     ga_param: 'transaction_id',
                                     source: 'order_id',
@@ -780,7 +725,7 @@ class GA_WP_Integration
                                 },
                                 {
                                     ga_param: 'value',
-                                    source: 'order_total',
+                                    source: 'order_items_value',
                                     pattern: ''
                                 },
                                 {
@@ -794,6 +739,10 @@ class GA_WP_Integration
                     const preset = presets[Math.floor(Math.random() * presets.length)];
                     addMapping(preset.event, preset.hooks, preset.parameters);
                 });
+
+                function escapeAttribute(value) {
+                    return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                }
 
                 // Add new mapping
                 function addMapping(event = '', hooks = [], parameters = [{
@@ -878,7 +827,7 @@ class GA_WP_Integration
                                                     <label for="pattern-${mappingCount}-${paramIndex}"><?php echo esc_js(__('Pattern', 'ga-wp-integration')); ?>:</label>
                                                     <input type="text" id="pattern-${mappingCount}-${paramIndex}"
                                                            name="ga_wp_mappings[${mappingCount}][parameters][${paramIndex}][pattern]"
-                                                           value="${param.pattern}" placeholder="e.g., {product_id}-{variation_id}"
+                                                           value="${escapeAttribute(param.pattern ?? "")}" placeholder="e.g., {product_id}-{variation_id}"
                                                            title="<?php esc_attr_e('Optional: Combine values, e.g., {product_id}-{variation_id}', 'ga-wp-integration'); ?>" />
                                                 </div>
                                                 <button type="button" class="remove-parameter dashicons dashicons-trash" aria-label="<?php esc_attr_e('Remove parameter', 'ga-wp-integration'); ?>"></button>
@@ -929,7 +878,11 @@ class GA_WP_Integration
                 $('#ga-mappings-container').on('click', '.add-parameter', function() {
                     const $paramsContainer = $(this).closest('.parameters-container').find('.parameters-grid');
                     const mappingIndex = $(this).closest('.mapping-item').data('index');
-                    const paramCount = $paramsContainer.find('.parameter-item').length;
+                    const indexes = $paramsContainer.find('input[name$="[pattern]"]').map(function() {
+                        const key = this.name.match(/\[parameters\]\[(\d+)\]/);
+                        return key ? Number(key[1]) : -1;
+                    }).get();
+                    const paramCount = Math.max(-1, ...indexes) + 1;
 
                     const template = `
                         <div class="parameter-item">
@@ -1021,20 +974,20 @@ class GA_WP_Integration
                 updatePreview();
 
                 // Form validation
-                $('form').on('submit', function(e) {
+                $('#ga-integration-settings').on('submit', function(e) {
                     let isValid = true;
                     $('.mapping-item').each(function() {
                         const $mapping = $(this);
                         const event = $mapping.find('.ga-event-select').val();
                         const $params = $mapping.find('.parameter-item');
-                        if (!event) {
+                        if (!event || !($mapping.find('.ga-hooks-select').val() || []).length) {
                             isValid = false;
                             $mapping.find('.ga-event-select').addClass('error');
                         }
                         $params.each(function() {
                             const ga_param = $(this).find('.ga-param-select').val();
                             const source = $(this).find('.ga-source-select').val();
-                            if (!ga_param || !source) {
+                            if ((ga_param || source) && (!ga_param || !source)) {
                                 isValid = false;
                                 $(this).find('select[aria-required="true"]').addClass('error');
                             }
@@ -1042,7 +995,7 @@ class GA_WP_Integration
                     });
                     if (!isValid) {
                         e.preventDefault();
-                        alert('<?php echo esc_js(__('Please fill all required fields (Event and Parameter fields).', 'ga-wp-integration')); ?>');
+                        alert('<?php echo esc_js(__('Select an event and at least one hook. Give each parameter a name and a source.', 'ga-wp-integration')); ?>');
                     }
                 });
 
@@ -1342,27 +1295,34 @@ class GA_WP_Integration
             wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'ga-wp-integration'));
         }
 
-        if (isset($_GET['reset']) && '1' === $_GET['reset']) {
-            update_option('ga_wp_mappings', $this->default_mappings);
-            $this->event_mappings = $this->default_mappings;
-        ?>
-            <div class="notice notice-success">
-                <p><?php esc_html_e('Mappings have been reset to default values.', 'ga-wp-integration'); ?></p>
-            </div>
-        <?php
-        }
         ?>
         <div class="wrap">
             <h1><?php esc_html_e('Google Analytics Integration Settings', 'ga-wp-integration'); ?></h1>
-            <form method="post" action="options.php">
+            <?php settings_errors(); ?>
+            <form id="ga-integration-settings" method="post" action="options.php">
                 <?php
                 settings_fields('ga_wp_settings_group');
                 do_settings_sections('ga-wp-integration');
                 submit_button(__('Save Settings', 'ga-wp-integration'));
                 ?>
             </form>
+            <form id="ga-mappings-reset-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="ga_wp_reset_mappings">
+                <?php wp_nonce_field('ga_wp_reset_mappings'); ?>
+            </form>
         </div>
     <?php
+    }
+
+    public function reset_mappings()
+    {
+        if (! current_user_can('manage_options') || 'POST' !== ($_SERVER['REQUEST_METHOD'] ?? '')) {
+            wp_die(esc_html__('You do not have permission to reset these mappings.', 'ga-wp-integration'), '', ['response' => 403]);
+        }
+        check_admin_referer('ga_wp_reset_mappings');
+        delete_option('ga_wp_mappings');
+        wp_safe_redirect(admin_url('admin.php?page=ga-wp-integration'));
+        exit;
     }
 
     /**
@@ -1372,7 +1332,7 @@ class GA_WP_Integration
      */
     public function inject_gtm_code()
     {
-        if (empty($this->ga_settings['gtm_code'])) {
+        if (! $this->tracking_allowed()) {
             return;
         }
     ?>
@@ -1403,7 +1363,7 @@ class GA_WP_Integration
      */
     public function inject_gtm_noscript()
     {
-        if (empty($this->ga_settings['gtm_code'])) {
+        if (! $this->tracking_allowed()) {
             return;
         }
     ?>
@@ -1459,16 +1419,23 @@ class GA_WP_Integration
      */
     private function send_ga_event($mapping, $hook, $args)
     {
-        if (empty($mapping['event']) || empty($this->ga_settings['gtm_code'])) {
+        if (empty($mapping['event']) || ! $this->tracking_allowed()) {
             return;
         }
 
         // Event-specific conditions
-        if ('view_item' === $mapping['event'] && ! is_product()) {
+        if ('view_item' === $mapping['event'] && (! function_exists('is_product') || ! is_product())) {
             return;
         }
-        if ('view_item_list' === $mapping['event'] && ! (is_shop() || is_product_category() || is_product_tag() || is_search())) {
+        if ('view_item_list' === $mapping['event'] && (! function_exists('is_shop') || ! (is_shop() || is_product_category() || is_product_tag() || is_search()))) {
             return;
+        }
+
+        if ('purchase' === $mapping['event'] && 'woocommerce_thankyou' === $hook) {
+            $order = function_exists('wc_get_order') && ! empty($args[0]) ? wc_get_order($args[0]) : false;
+            if (! $order || ! $order->is_paid()) {
+                return;
+            }
         }
 
         $event_data = [];
@@ -1480,16 +1447,19 @@ class GA_WP_Integration
 
                 $value = $this->get_parameter_value($param['source'], $param['pattern'] ?? '', $hook, $args);
 
-                if (false !== strpos($param['ga_param'], 'items') && null !== $value) {
-                    $decoded = json_decode($value, true);
-                    if (is_array($decoded)) {
-                        $event_data[$param['ga_param']] = $decoded;
-                        continue;
+                if ('items' === $param['ga_param']) {
+                    $items = is_string($value) ? json_decode($value, true) : $value;
+                    if (is_array($items) && array_values($items) === $items) {
+                        $event_data['items'] = $items;
                     }
+                    continue;
                 }
 
-                if (null !== $value) {
-                    $event_data[$param['ga_param']] = $value;
+                if (is_scalar($value)) {
+                    $numeric_parameters = ['value', 'price', 'quantity', 'tax', 'shipping'];
+                    $event_data[$param['ga_param']] = is_numeric($value) && in_array($param['ga_param'], $numeric_parameters, true)
+                        ? (float) $value
+                        : $value;
                 }
             }
         }
@@ -1499,30 +1469,48 @@ class GA_WP_Integration
             return;
         }
 
-        // Debug output for admins
-        if (current_user_can('administrator') && isset($_GET['ga_debug'])) {
-            echo '<pre>';
-            echo esc_html('Event: ' . $mapping['event'] . "\n");
-            echo esc_html('Hook: ' . $hook . "\n");
-            echo esc_html('Data: ');
-            print_r($event_data);
-            echo '</pre>';
+        $event = ['event' => $mapping['event']] + $event_data;
+        if ('purchase' === $mapping['event'] && ! empty($event['transaction_id'])) {
+            $event['transaction_id'] = (string) $event['transaction_id'];
+            $this->pending_events['purchase:' . $event['transaction_id']] = $event;
+        } else {
+            $this->pending_events[] = $event;
+        }
+    }
+
+    private function tracking_allowed()
+    {
+        if (empty($this->ga_settings['gtm_code']) || is_admin() || wp_doing_ajax() || wp_doing_cron()
+            || (defined('REST_REQUEST') && REST_REQUEST) || (defined('XMLRPC_REQUEST') && XMLRPC_REQUEST)
+            || (defined('WP_CLI') && WP_CLI) || (did_action('wp') && (is_feed() || is_embed() || is_preview()))) {
+            return false;
+        }
+        if (did_action('wp') && is_singular()) {
+            $post = get_queried_object();
+            if ($post instanceof WP_Post && ('publish' !== $post->post_status || '' !== $post->post_password)) {
+                return false;
+            }
+        }
+        return (bool) apply_filters('ga_wp_tracking_allowed', true);
+    }
+
+    public function render_events()
+    {
+        if (! $this->pending_events || ! $this->tracking_allowed()) {
+            return;
         }
 
-    ?>
-        <script>
-            window.dataLayer = window.dataLayer || [];
-            dataLayer.push({
-                'event': '<?php echo esc_js($mapping['event']); ?>',
-                <?php foreach ($event_data as $key => $value) : ?>
-                    <?php if (is_array($value)) : ?> '<?php echo esc_js($key); ?>': <?php echo wp_json_encode($value); ?>,
-                    <?php else : ?>
-                        wojny '<?php echo esc_js($key); ?>': <?php echo is_numeric($value) ? $value : "'" . esc_js($value) . "'"; ?>,
-                    <?php endif; ?>
-                <?php endforeach; ?>
-            });
-        </script>
-<?php
+        $events = wp_json_encode(array_values($this->pending_events), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        $this->pending_events = [];
+        if (false === $events) {
+            return;
+        }
+        $debug = current_user_can('manage_options') && isset($_GET['ga_debug']) && '1' === $_GET['ga_debug'];
+        echo '<script>(function(events){window.dataLayer=window.dataLayer||[];events.forEach(function(event){window.dataLayer.push(event);';
+        if ($debug) {
+            echo 'console.debug("[GA Integration]", event);';
+        }
+        echo '});})(' . $events . ');</script>';
     }
 
     /**
@@ -1544,37 +1532,22 @@ class GA_WP_Integration
             $value = get_bloginfo('name');
         } elseif ('wordpress' === $source) {
             $value = 'WordPress';
-        } elseif (strpos($source, 'user.') === 0) {
-            $user_property = substr($source, 5);
-            $current_user  = wp_get_current_user();
-            if ($current_user->ID > 0) {
-                switch ($user_property) {
-                    case 'id':
-                        $value = $current_user->ID;
-                        break;
-                    case 'username':
-                        $value = $current_user->user_login;
-                        break;
-                    case 'email':
-                        $value = $current_user->user_email;
-                        break;
-                    case 'display_name':
-                        $value = $current_user->display_name;
-                        break;
-                    case 'role':
-                        $value = ! empty($current_user->roles) ? $current_user->roles[0] : '';
-                        break;
-                    default:
-                        $value = get_user_meta($current_user->ID, $user_property, true);
-                }
+        } elseif ('user.id' === $source || 'user_id' === $source) {
+            $user = wp_get_current_user();
+            if ('wp_login' === $hook && isset($args[1]) && $args[1] instanceof WP_User) {
+                $user = $args[1];
             }
+            $value = $user->ID > 0 ? (string) $user->ID : null;
+        } elseif ('user.role' === $source) {
+            $roles = wp_get_current_user()->roles;
+            $value = $roles ? reset($roles) : null;
         } elseif (strpos($source, 'taxonomy.') === 0) {
             $tax_parts = explode('.', $source, 3);
             if (count($tax_parts) >= 3) {
                 $taxonomy     = $tax_parts[1];
                 $tax_property = $tax_parts[2];
-                if (is_tax($taxonomy) || is_category() || is_tag()) {
-                    $term = get_queried_object();
+                $term = get_queried_object();
+                if ($term instanceof WP_Term && $term->taxonomy === $taxonomy) {
                     switch ($tax_property) {
                         case 'id':
                             $value = $term->term_id;
@@ -1597,7 +1570,7 @@ class GA_WP_Integration
         } elseif (strpos($source, 'post.') === 0) {
             $post_property = substr($source, 5);
             $post          = get_post();
-            if ($post) {
+            if ($post && 'publish' === $post->post_status && '' === $post->post_password) {
                 switch ($post_property) {
                     case 'id':
                         $value = $post->ID;
@@ -1623,7 +1596,7 @@ class GA_WP_Integration
                         $value = implode(', ', $tag_names);
                         break;
                     default:
-                        $value = get_post_meta($post->ID, $post_property, true);
+                        $value = ! is_protected_meta($post_property, 'post') ? get_post_meta($post->ID, $post_property, true) : null;
                 }
             }
         } elseif (strpos($source, 'meta.') === 0) {
@@ -1633,15 +1606,18 @@ class GA_WP_Integration
                 $value = get_woocommerce_currency();
             } else {
                 $post = get_post();
-                if ($post) {
+                if ($post && 'publish' === $post->post_status && '' === $post->post_password && ! is_protected_meta($meta_key, 'post')) {
                     $value = get_post_meta($post->ID, $meta_key, true);
                 }
             }
         } elseif (strpos($source, 'jet.') === 0) {
             // Handle JetEngine custom fields
             $field_name = substr($source, 4);
-            if (function_exists('jet_engine')) {
-                $value = jet_engine()->listings->data->get_meta($field_name);
+            if (function_exists('jet_engine') && ! is_protected_meta($field_name, 'post')) {
+                $data = jet_engine()->listings->data ?? null;
+                if (is_object($data) && is_callable([$data, 'get_meta'])) {
+                    $value = $data->get_meta($field_name);
+                }
             }
         } elseif (function_exists('WC')) {
             // Handle WooCommerce sources
@@ -1666,7 +1642,7 @@ class GA_WP_Integration
                     break;
                 case 'price':
                     if ('woocommerce_add_to_cart' === $hook && ! empty($args[2])) {
-                        $product = wc_get_product($args[1]);
+                        $product = wc_get_product(! empty($args[3]) ? $args[3] : $args[1]);
                         $value   = $product ? wc_get_price_to_display($product) * $args[2] : null;
                     }
                     break;
@@ -1676,8 +1652,8 @@ class GA_WP_Integration
                     }
                     break;
                 case 'variation_id':
-                    if ('woocommerce_add_to_cart' === $hook && ! empty($args[4])) {
-                        $value = $args[4];
+                    if ('woocommerce_add_to_cart' === $hook && ! empty($args[3])) {
+                        $value = $args[3];
                     }
                     break;
                 case 'cart_total':
@@ -1704,36 +1680,46 @@ class GA_WP_Integration
                     }
                     break;
                 case 'order_id':
-                    if (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
+                    if (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
                         $value = $args[0];
                     }
                     break;
                 case 'order_total':
-                    if (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
+                    if (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
                         $order = wc_get_order($args[0]);
                         $value = $order ? $order->get_total() : null;
                     }
                     break;
+                case 'order_items_value':
+                    if ('woocommerce_thankyou' === $hook && ! empty($args[0])) {
+                        $order = wc_get_order($args[0]);
+                        if ($order) {
+                            $value = array_sum(array_map(static function ($item) {
+                                return (float) $item->get_total();
+                            }, $order->get_items()));
+                        }
+                    }
+                    break;
                 case 'order_currency':
-                    if (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
+                    if (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
                         $order = wc_get_order($args[0]);
                         $value = $order ? $order->get_currency() : null;
                     }
                     break;
                 case 'order_tax':
-                    if (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed'], true) && ! empty($args[0])) {
+                    if (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed'], true) && ! empty($args[0])) {
                         $order = wc_get_order($args[0]);
                         $value = $order ? $order->get_total_tax() : null;
                     }
                     break;
                 case 'order_shipping':
-                    if (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed'], true) && ! empty($args[0])) {
+                    if (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed'], true) && ! empty($args[0])) {
                         $order = wc_get_order($args[0]);
                         $value = $order ? $order->get_shipping_total() : null;
                     }
                     break;
                 case 'order_coupon_codes':
-                    if (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed'], true) && ! empty($args[0])) {
+                    if (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed'], true) && ! empty($args[0])) {
                         $order = wc_get_order($args[0]);
                         $coupons = $order ? $order->get_coupon_codes() : [];
                         $value   = ! empty($coupons) ? implode(', ', $coupons) : '';
@@ -1774,7 +1760,7 @@ class GA_WP_Integration
 
         // Apply pattern if provided
         if ($value !== null && ! empty($pattern)) {
-            $value = $this->apply_pattern($pattern, $source, $value, $hook, $args);
+            $value = $this->apply_pattern($pattern, $hook, $args);
         }
 
         return $value;
@@ -1785,20 +1771,18 @@ class GA_WP_Integration
      *
      * @since 1.0.0
      * @param string $pattern The pattern to apply.
-     * @param string $source  The original source.
-     * @param mixed  $value   The original value.
      * @param string $hook    The triggered hook.
      * @param array  $args    Hook arguments.
      * @return string The formatted value.
      */
-    private function apply_pattern($pattern, $source, $value, $hook, $args)
+    private function apply_pattern($pattern, $hook, $args)
     {
         $replacements = [];
         preg_match_all('/\{([^\}]+)\}/', $pattern, $matches);
         if (! empty($matches[1])) {
             foreach ($matches[1] as $placeholder) {
                 $placeholder_value = $this->get_parameter_value($placeholder, '', $hook, $args);
-                $replacements['{' . $placeholder . '}'] = $placeholder_value ?? '';
+                $replacements['{' . $placeholder . '}'] = is_scalar($placeholder_value) ? (string) $placeholder_value : '';
             }
         }
         return str_replace(array_keys($replacements), array_values($replacements), $pattern);
@@ -1816,30 +1800,27 @@ class GA_WP_Integration
     {
         $items = [];
         if ('woocommerce_add_to_cart' === $hook && ! empty($args[1]) && ! empty($args[2])) {
-            $product = wc_get_product($args[1]);
+            $product = wc_get_product(! empty($args[3]) ? $args[3] : $args[1]);
             if ($product) {
                 $items[] = [
                     'item_id'      => $product->get_id(),
                     'item_name'    => $product->get_name(),
                     'price'        => wc_get_price_to_display($product),
                     'quantity'     => $args[2],
-                    'item_variant' => ! empty($args[4]) ? $args[4] : '',
+                    'item_variant' => ! empty($args[3]) ? $args[3] : '',
                 ];
             }
-        } elseif (in_array($hook, ['woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
+        } elseif (in_array($hook, ['woocommerce_thankyou', 'woocommerce_payment_complete', 'woocommerce_order_status_completed', 'woocommerce_order_status_refunded'], true) && ! empty($args[0])) {
             $order = wc_get_order($args[0]);
             if ($order) {
                 foreach ($order->get_items() as $item) {
-                    $product = $item->get_product();
-                    if ($product) {
-                        $items[] = [
-                            'item_id'      => $product->get_id(),
-                            'item_name'    => $product->get_name(),
-                            'price'        => wc_get_price_to_display($product),
-                            'quantity'     => $item->get_quantity(),
-                            'item_variant' => $item->get_variation_id() ? $item->get_variation_id() : '',
-                        ];
-                    }
+                    $items[] = [
+                        'item_id'      => (string) ($item->get_variation_id() ?: $item->get_product_id()),
+                        'item_name'    => $item->get_name(),
+                        'price'        => (float) $order->get_item_total($item),
+                        'quantity'     => $item->get_quantity(),
+                        'item_variant' => (string) ($item->get_variation_id() ?: ''),
+                    ];
                 }
             }
         }
@@ -1883,21 +1864,17 @@ class GA_WP_Integration
         $items = [];
         if (is_shop() || is_product_category() || is_product_tag() || is_search()) {
             global $wp_query;
-            if ($wp_query->have_posts()) {
-                while ($wp_query->have_posts()) {
-                    $wp_query->the_post();
-                    $product = wc_get_product(get_the_ID());
-                    if ($product) {
-                        $items[] = [
-                            'item_id'      => $product->get_id(),
-                            'item_name'    => $product->get_name(),
-                            'price'        => wc_get_price_to_display($product),
-                            'quantity'     => 1,
-                            'item_variant' => '',
-                        ];
-                    }
+            foreach ((array) $wp_query->posts as $post) {
+                $product = wc_get_product($post instanceof WP_Post ? $post->ID : $post);
+                if ($product) {
+                    $items[] = [
+                        'item_id'      => $product->get_id(),
+                        'item_name'    => $product->get_name(),
+                        'price'        => wc_get_price_to_display($product),
+                        'quantity'     => 1,
+                        'item_variant' => '',
+                    ];
                 }
-                wp_reset_postdata();
             }
         }
         return ! empty($items) ? wp_json_encode($items) : null;
@@ -1959,9 +1936,9 @@ class GA_WP_Integration
      */
     private function get_removed_item_json($hook, $args)
     {
-        if ('woocommerce_cart_item_removed' === $hook && ! empty($args[0]) && ! empty($args[1])) {
-            $cart_item = $args[0];
-            $product   = $cart_item['data'];
+        $cart_item = $this->get_removed_item($hook, $args);
+        if ($cart_item) {
+            $product = $cart_item['data'] ?? null;
             if ($product) {
                 $item = [
                     'item_id'      => $product->get_id(),
@@ -1986,14 +1963,24 @@ class GA_WP_Integration
      */
     private function get_removed_item_price($hook, $args)
     {
-        if ('woocommerce_cart_item_removed' === $hook && ! empty($args[0]) && ! empty($args[1])) {
-            $cart_item = $args[0];
-            $product   = $cart_item['data'];
+        $cart_item = $this->get_removed_item($hook, $args);
+        if ($cart_item) {
+            $product = $cart_item['data'] ?? null;
             if ($product) {
                 return wc_get_price_to_display($product) * $cart_item['quantity'];
             }
         }
         return null;
+    }
+
+    private function get_removed_item($hook, $args)
+    {
+        if ('woocommerce_cart_item_removed' !== $hook || ! isset($args[0], $args[1]) || ! $args[1] instanceof WC_Cart) {
+            return null;
+        }
+        $cart = $args[1];
+        $removed = $cart->get_removed_cart_contents();
+        return $removed[$args[0]] ?? null;
     }
 }
 
