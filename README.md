@@ -80,6 +80,9 @@ Map only public, non-identifying values. Direct email, username, display name, a
 ```
 ga-wp-integration/
 ├── ga-wp-integration.php
+├── assets/css/event-mappings.css
+├── views/event-mappings.php
+├── tests/integration-smoke.php
 ├── LICENSE
 ├── readme.txt
 └── README.md
