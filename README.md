@@ -39,7 +39,7 @@ The **Google Analytics WP Integration** plugin enables WordPress and WooCommerce
 
 5. **Test the Setup**:
    - Save your settings and verify GTM code injection in the `<head>` and `<body>` sections.
-   - Use Google Tag Manager’s Preview mode or enable debug mode by adding `?ga_debug=1` to any URL (admin-only) to test event tracking.
+   - Use Google Tag Manager’s Preview mode or add `?ga_debug=1` to a frontend URL while signed in as an administrator to see events in your browser console.
 
 ## Usage
 
@@ -53,21 +53,19 @@ The **Google Analytics WP Integration** plugin enables WordPress and WooCommerce
    - Customize parameters using sources (e.g., `product_id`, `order_total`) and patterns (e.g., `{product_id}-{variation_id}`).
 
 3. **Debugging**:
-   - Enable debug mode by appending `?ga_debug=1` to any URL (visible to admins only) to view event data.
+   - Append `?ga_debug=1` to a frontend URL while signed in as an administrator to log events to the browser console.
    - Use Google Tag Manager’s Preview mode to monitor `dataLayer` events.
 
 4. **WooCommerce Tracking**:
    - The plugin automatically detects WooCommerce and provides mappings for e-commerce events.
-   - Track product views, cart actions, checkouts, purchases, and refunds with minimal setup.
+   - Default purchase tracking uses the paid order confirmation in classic WooCommerce checkout. It sends the order ID as the transaction ID and the sum of line totals as the event value, with tax and shipping as separate fields.
+   - Existing sites that map purchases to background payment hooks can select `woocommerce_thankyou` in Event Mappings. The browser data layer requires a rendered HTML page. Redirect-only login and registration, background refunds, AJAX, and API-only workflows need a separate event transport.
 
-## Screenshots
+## Tracking controls
 
-1. **Settings Page**: Configure GTM container ID and manage event mappings.
-   ![Settings Page](screenshots/settings-page.png)
-2. **Event Mapping Interface**: Add or edit mappings with a live JSON preview.
-   ![Event Mapping](screenshots/event-mapping.png)
-3. **Help & Documentation**: Built-in tabs explaining hooks, sources, and patterns.
-   ![Help Section](screenshots/help-section.png)
+The plugin starts tracking after a valid GTM container ID is saved. A consent integration can return `false` from the `ga_wp_tracking_allowed` filter to suppress the GTM script, fallback iframe, and event data. Sites that vary tracking by visitor consent must apply the same policy to their page cache.
+
+Map only public, non-identifying values. Direct email, username, display name, and arbitrary user metadata sources are excluded, as are protected post metadata values.
 
 ## Requirements
 
@@ -102,6 +100,14 @@ Please ensure your code follows WordPress coding standards and includes appropri
 - Update the version number in `ga-wp-integration.php` and this README.
 - Test thoroughly on a WordPress installation with and without WooCommerce.
 - Create a ZIP file for distribution: `zip -r ga-wp-integration.zip ga-wp-integration/ -x "*.git*"`.
+
+Run the integration checks against a disposable WordPress install with WooCommerce and this plugin active.
+
+```sh
+for mode in checkout settings legacy rest ajax disabled; do
+  GA_WP_RUN_INTEGRATION=1 php tests/integration-smoke.php /path/to/wordpress "$mode" || exit 1
+done
+```
 
 ## Changelog
 

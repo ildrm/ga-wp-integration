@@ -1,4 +1,3 @@
-```
 === Google Analytics WP Integration ===
 Contributors: shahinilderemi
 Tags: google analytics, google tag manager, woocommerce, analytics, tracking
@@ -13,7 +12,7 @@ Integrates WordPress and WooCommerce events with Google Analytics using Google T
 
 == Description ==
 
-The **Google Analytics WP Integration** plugin provides a robust solution for connecting your WordPress and WooCommerce websites to Google Analytics via Google Tag Manager (GTM). It allows you to map WordPress and WooCommerce hooks to Google Analytics events, enabling detailed tracking of user interactions such as logins, registrations, product views, cart actions, purchases, and more.
+Google Analytics WP Integration maps WordPress and WooCommerce hooks to Google Analytics events via Google Tag Manager (GTM). Events are available to the browser when a mapped hook runs while WordPress renders a frontend HTML page. Common uses include product views, cart actions, and paid order confirmations.
 
 ### Key Features
 - **Google Tag Manager Integration**: Easily inject GTM code into your site with a simple configuration.
@@ -53,7 +52,7 @@ This plugin is ideal for website owners, developers, and marketers who want to l
 Yes, you need a Google Tag Manager account and a container ID (e.g., `GTM-XXXXXX`) to use this plugin. The plugin injects the GTM code and pushes events to the dataLayer for Google Analytics.
 
 = Does this plugin support WooCommerce? =
-Yes, the plugin includes comprehensive support for WooCommerce, with predefined mappings for events like `add_to_cart`, `purchase`, `view_item`, and more. It automatically detects WooCommerce if installed.
+Yes. The plugin auto-detects WooCommerce. Its frontend mappings include product views, cart actions, and paid classic-checkout confirmations. Background refunds, redirect-only actions, and API or AJAX responses require a separate event transport.
 
 = Can I customize event mappings? =
 Absolutely! The plugin provides a flexible admin interface to create, edit, or delete event mappings. You can specify hooks, Google Analytics events, parameters, and patterns to customize tracking.
@@ -65,7 +64,7 @@ In the plugin’s settings page, click the **Reset to Defaults** button to resto
 Yes, the plugin is fully translation-ready. It includes a text domain (`ga-wp-integration`) and supports localization in the `/languages` directory.
 
 = How can I debug events? =
-Administrators can enable debug mode by adding `?ga_debug=1` to any URL on the site. This displays event data on the front end for verification. Additionally, use Google Tag Manager’s Preview mode to monitor dataLayer events.
+Administrators can append `?ga_debug=1` to a frontend URL to see the events in their browser console. Google Tag Manager’s Preview mode can also inspect dataLayer events.
 
 == Screenshots ==
 
@@ -95,4 +94,3 @@ This plugin is licensed under the GPLv2 or later. See the [license file](https:/
 == Credits ==
 
 Developed by Shahin Ilderemi. Special thanks to the WordPress and WooCommerce communities for their invaluable resources and support.
-```
